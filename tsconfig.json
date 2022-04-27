@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "es2021",
+    "module": "commonjs",
+    "rootDir": "./",
+    "types": [
+      "node"
+    ],
+    "sourceMap": true,
+    "moduleResolution": "Node",
+    "strict": false,
+    "allowJs": true,
+    "downlevelIteration": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "./"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
