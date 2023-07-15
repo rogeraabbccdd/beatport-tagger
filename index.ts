@@ -2,10 +2,10 @@ import * as ffmpeg from 'fluent-ffmpeg'
 import * as fs from 'fs'
 import * as path from 'path'
 import axios, { AxiosResponse } from 'axios'
-import cheerio, { CheerioAPI } from 'cheerio'
 import * as flac from 'flac-metadata'
 import * as images from 'images'
 import { pipeline } from 'stream/promises'
+import * as truncate from 'truncate-utf8-bytes'
 
 interface Tag {
   // Track name
@@ -21,6 +21,12 @@ interface Tag {
   // Track cover art
   APIC: ArrayBuffer|null,
 }
+
+const illegalRe = /[/?<>\\:*|"]/g
+const controlRe = /[\x00-\x1f\x80-\x9f]/g
+const reservedRe = /^\.+$/
+const windowsReservedRe = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i
+const windowsTrailingRe = /[. ]+$/
 
 const convertFlac = (file: string): Promise<string|undefined> => {
   return new Promise((resolve, reject) => {
@@ -51,33 +57,39 @@ const fetchTags = async (matches: string[]): Promise<void> => {
       APIC: null
     }
     console.log(`Fetching tags for ${matches[2]}...`)
-    const trackQuery: string = matches[2].replace(/_\([^_]+\)$/g, '+').replace(/\(|\)|\.|\s/g, '-').toLowerCase()
     // Search track by track id and name
-    let result: AxiosResponse = await axios.get(`https://www.beatport.com/track/${trackQuery}/${matches[1]}`)
-    let $: CheerioAPI = cheerio.load(result.data)
-    tag.genre = $('.interior-track-content-item.interior-track-genre .value').text().trim().split('|').map(s => s.trim()).join(', ')
+    console.log(`https://api.beatport.com/v4/catalog/tracks/${matches[1]}`)
+    let result: AxiosResponse = await axios.get(`https://api.beatport.com/v4/catalog/tracks/${matches[1]}`, {
+      headers: {
+        origin: 'https://www.beatport.com',
+        Authorization: 'Bearer xxxxx'
+      }
+    })
+    tag.genre = result.data.genre.name
     const artists = []
-    for (let i = 0; i < $('.interior-track-artists .value').length; i++) {
-      artists.push(...$('.interior-track-artists .value').eq(i).text().replace(/\n/g, '').split(',').map(s => s.trim()))
+    for (let i = 0; i < result.data.artists.length; i++) {
+      artists.push(result.data.artists[i].name)
     }
     tag.artist = artists.join(', ')
-    tag.date = new Date($('.interior-track-content-item.interior-track-released .value').text().trim()).getFullYear().toString()
+    tag.date = result.data.publish_date.split('-')[0]
+    tag.album = result.data.release.name
     // Get cover buffer
-    const coverURL = $('.interior-track-release-artwork').attr('src')?.replace('500x500', '1400x1400') || ''
+    const coverURL = result.data.release.image.uri
     if (coverURL.length > 0) {
       result = await axios.get(coverURL, { responseType: 'arraybuffer' })
       // Convert webp to jpg
       tag.APIC = await images(result.data).encode('jpg')
+      console.log(coverURL)
     }
-    // Get release album name
-    const releaseURL: string = $('.interior-track-release-artwork-link').attr('href') || ''
-    if (releaseURL.length > 0) {
-      result = await axios.get('https://www.beatport.com' + releaseURL)
-      $ = cheerio.load(result.data)
-      tag.album = $('.interior-release-chart-content h1').text().trim()
-    }
+
     const filenameOld = matches[1] + '_' + matches[2] + '.flac'
-    const filenameNew = `${tag.artist} - ${tag.title}.flac`
+    let filenameNew = `${tag.artist} - ${tag.title}.flac`
+      .replace(illegalRe, '')
+      .replace(controlRe, '')
+      .replace(reservedRe, '')
+      .replace(windowsReservedRe, '')
+      .replace(windowsTrailingRe, '')
+    filenameNew = truncate(filenameNew, filenameNew.length)
     const filepath: string = path.join(process.argv[2], filenameOld)
     const outputFolder = path.join(process.argv[2], 'output')
     const outputpath = path.join(outputFolder, filenameNew)
@@ -114,7 +126,7 @@ const fetchTags = async (matches: string[]): Promise<void> => {
     fs.unlinkSync(filepath)
   } catch (error) {
     const err = error as Error
-    console.log(err.message)
+    console.log(err)
   }
 }
 
